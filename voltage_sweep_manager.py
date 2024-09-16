@@ -62,6 +62,9 @@ class VoltageSweepManager:
                         f"Missing required config parameter: {key}")
 
             # Unpack configuration
+            ch1_voltage = config['ch1_voltage']
+            ch2_voltage = config['ch2_voltage']
+            ch3_voltage = config['ch3_voltage']
             start_voltage = config['start_voltage']
             end_voltage = config['end_voltage']
             step_size = config['step_size']
@@ -95,6 +98,14 @@ class VoltageSweepManager:
                 def voltage_condition(cv):
                     return current_step == 0
 
+            self.psu.set_voltage(1, ch1_voltage)
+            self.psu.set_voltage(2, ch2_voltage)
+            self.psu.set_voltage(3, ch3_voltage)
+            
+            self.psu.output_on(1)
+            self.psu.output_on(2)
+            self.psu.output_on(3)
+            
             while voltage_condition(current_voltage) and not self.stop_event.is_set():
                 # Perform voltage setting and control logic
                 self.psu.set_voltage(channel, current_voltage)
@@ -162,7 +173,12 @@ class VoltageSweepManager:
 
                 current_voltage += step_size
 
+            self.psu.output_off(1)
+            self.psu.output_off(2)
+            self.psu.output_off(3)
+
             logging.info("Voltage sweep on channel %s completed.", channel)
+            
             if self.gui_queue:
                 self.gui_queue.put(('progress', 100))
                 self.gui_queue.put(('done', None))
