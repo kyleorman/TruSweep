@@ -129,47 +129,41 @@ class VoltageSweepManager:
                     self.gui_queue.put(('progress', progress))
 
                 # Control flow based on modes
-                if power_cycle:
-                    self.psu.output_off(channel)
-                    if uart_control and self.uart:
-                        try:
-                            self.wait_for_uart_signal(['ON'], timeout=30)
-                        except TimeoutError as e:
-                            logging.error(
-                                "Timeout waiting for UART signal 'ON': %s", e)
-                            if self.gui_queue:
-                                self.gui_queue.put(
-                                    (
-                                        'error',
-                                        f"Timeout waiting for UART signal 'ON': {e}"))
-                            break
-                    else:
-                        self._sleep_with_stop_check(off_time)
-                    self.psu.output_on(channel)
-                    if uart_control and self.uart:
-                        try:
-                            self.wait_for_uart_signal(['I'], timeout=30)
-                        except TimeoutError as e:
-                            logging.error(
-                                "Timeout waiting for UART signal 'I': %s", e)
-                            if self.gui_queue:
-                                self.gui_queue.put(
-                                    ('error', f"Timeout waiting for UART signal 'I': {e}"))
-                            break
-                    else:
-                        self._sleep_with_stop_check(on_time)
-                elif uart_control and self.uart:
+                if uart_control and self.uart:
                     try:
-                        self.wait_for_uart_signal(['I'], timeout=30)
+                        if power_cycle:
+                            # Wait for '1', '0', or 'I' when power cycling
+                            expected_signals = ['1', '0', 'I']
+                        else:
+                            # Only wait for 'I' when not power cycling
+                            expected_signals = ['I']
+                        signal = self.wait_for_uart_signal(expected_signals, timeout=30)
+                        if signal == '1' and power_cycle:
+                            # Turn PSU on
+                            self.psu.output_on(channel)
+                        elif signal == '0' and power_cycle:
+                            # Turn PSU off
+                            self.psu.output_off(channel)
+                        elif signal == 'I':
+                            # Proceed to next voltage increment
+                            pass
                     except TimeoutError as e:
                         logging.error(
-                            "Timeout waiting for UART signal 'I': %s", e)
+                            "Timeout waiting for UART signal: %s", e)
                         if self.gui_queue:
                             self.gui_queue.put(
-                                ('error', f"Timeout waiting for UART signal 'I': {e}"))
+                                ('error', f"Timeout waiting for UART signal: {e}"))
                         break
                 else:
-                    self._sleep_with_stop_check(increment_time)
+                    if power_cycle:
+                        # Power cycle without UART control
+                        self.psu.output_off(channel)
+                        self._sleep_with_stop_check(off_time)
+                        self.psu.output_on(channel)
+                        self._sleep_with_stop_check(on_time)
+                    else:
+                        # Just wait for increment_time
+                        self._sleep_with_stop_check(increment_time)
 
                 current_voltage += step_size
 
