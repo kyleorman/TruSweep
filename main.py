@@ -658,92 +658,256 @@ class TruSweepApp:
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to save profile: {e}")
 
-    def show_uart_instructions(self):
-        """Display UART setup instructions in a new window. Needs to be modified based on the specific setup."""
-        instructions = """
-        UART Setup Instructions for VHDL Testbench in Vivado:
+def show_uart_instructions(self):
+    """Display UART setup instructions in a new window."""
+    instructions = """
+    UART Setup Instructions for VHDL Testbench in Vivado:
 
-        1. **Create a VHDL Testbench:**
-           - Open Vivado and create a new project.
-           - Add your UART VHDL module to the project.
-           - Right-click on the module and select "Create File" -> "VHDL Test Bench".
+    **In Vivado, add the AXI UART Lite IP to your project:**
+       - Select the IP Catalog from the left menu.
+       - Search for UART and select the AXI UART Lite IP.
+       - Configure it for 8 bits, no parity, and 9600 baud.
 
-        2. **Instantiate the UART Module:**
-           - In the testbench, instantiate your UART module.
-           - Connect the UART signals (e.g., tx, rx, clk, reset).
+    **If you are using a synchronous wrapper, you may use the following VHDL with minimal modification:**
 
-        3. **Configure Simulation Settings:**
-           - Set up the clock signal in your testbench:
-             ```vhdl
-             clk_process : process
-             begin
-                 clk <= '0';
-                 wait for 5 ns;
-                 clk <= '1';
-                 wait for 5 ns;
-             end process;
-             ```
-           - Initialize the reset signal:
-             ```vhdl
-             reset <= '1';
-             wait for 20 ns;
-             reset <= '0';
-             ```
+    -- Add to Signal Declarations
+    -- Define AXI address constants
+    constant uart_rxfifo_addr : std_logic_vector(3 downto 0) := "0000";
+    constant uart_txfifo_addr : std_logic_vector(3 downto 0) := "0100";
 
-        4. **Simulate UART Transmission:**
-           - To simulate sending data over UART, toggle the `rx` line according to the UART protocol (start bit, data bits, parity bit, stop bit).
-           - Example of sending a byte (0x49 for 'I'):
-             ```vhdl
-             process
-             begin
-                 -- Start bit
-                 rx <= '0';
-                 wait for bit_period;
+    -- UART signals
+    signal s_axi_awaddr  : std_logic_vector(3 downto 0) := uart_txfifo_addr;
+    signal s_axi_araddr  : std_logic_vector(3 downto 0) := uart_rxfifo_addr;
+    signal s_axi_awready : std_logic;
+    signal s_axi_wready  : std_logic;
+    signal s_axi_arready : std_logic;
+    signal s_axi_rvalid  : std_logic;
+    signal s_axi_aresetn : std_logic;
+    signal s_axi_arvalid : std_logic                    := '0';
+    signal s_axi_rready  : std_logic                    := '0';
+    signal s_axi_bvalid  : std_logic;
+    signal s_axi_bready  : std_logic                    := '0';
 
-                 -- Data bits (LSB first)
-                 rx <= '1'; -- Bit 0
-                 wait for bit_period;
-                 rx <= '0'; -- Bit 1
-                 -- Continue for remaining bits
+    signal s_axi_wdata, s_axi_rdata : std_logic_vector(31 downto 0);
+    signal s_axi_bresp, s_axi_rresp : std_logic_vector(1 downto 0);
+    signal s_axi_wstrb              : std_logic_vector(3 downto 0) := "0001";
+    signal s_axi_awvalid            : std_logic                    := '0';
+    signal s_axi_wvalid             : std_logic                    := '0';
 
-                 -- Stop bit
-                 rx <= '1';
-                 wait for bit_period;
+    -- UART Transmission State Machine Signals
+    constant state_idle        : std_logic_vector(2 downto 0) := "000";
+    constant state_send        : std_logic_vector(2 downto 0) := "001";
+    constant state_wait_bvalid : std_logic_vector(2 downto 0) := "010";
 
-                 wait;
-             end process;
-             ```
+    signal uart_state  : std_logic_vector(2 downto 0) := state_idle;
+    signal uart_buffer : std_logic_vector(7 downto 0);
+    signal uart_valid  : std_logic                    := '0';
 
-        5. **Set Up UART on the FPGA:**
-           - Assign the UART pins to the appropriate FPGA pins in the constraints file (.xdc).
-           - Ensure the FPGA is programmed with the UART module.
+    -- Add to Component Declarations
+    component axi_uartlite_0 is
+        port (
+            s_axi_aclk    : in    std_logic;
+            s_axi_aresetn : in    std_logic;
+            interrupt     : out   std_logic;
+            s_axi_awaddr  : in    std_logic_vector(3 downto 0);
+            s_axi_awvalid : in    std_logic;
+            s_axi_awready : out   std_logic;
+            s_axi_wdata   : in    std_logic_vector(31 downto 0);
+            s_axi_wstrb   : in    std_logic_vector(3 downto 0);
+            s_axi_wvalid  : in    std_logic;
+            s_axi_wready  : out   std_logic;
+            s_axi_bresp   : out   std_logic_vector(1 downto 0);
+            s_axi_bvalid  : out   std_logic;
+            s_axi_bready  : in    std_logic;
+            s_axi_araddr  : in    std_logic_vector(3 downto 0);
+            s_axi_arvalid : in    std_logic;
+            s_axi_arready : out   std_logic;
+            s_axi_rdata   : out   std_logic_vector(31 downto 0);
+            s_axi_rresp   : out   std_logic_vector(1 downto 0);
+            s_axi_rvalid  : out   std_logic;
+            s_axi_rready  : in    std_logic;
+            rx            : in    std_logic;
+            tx            : out   std_logic
+        );
+    end component axi_uartlite_0;
+       
+    -- Add to Processes
+    -- PSU process controls the power supply in conjunction with the UART transmission
+    psu_process : process (clk_in) is
 
-        6. **Connect to the PC:**
-           - Use a USB-UART adapter connected to the FPGA UART pins.
-           - Install necessary drivers on the PC.
+        constant reset_duration : integer := 40000000;
+        constant off_duration   : integer := 39998000;
+        constant on_duration    : integer := 3000;
 
-        7. **Testing with the Python Script:**
-           - Run the Python script with UART control enabled.
-           - Ensure the UART settings (port and baud rate) match between the FPGA and the script.
+    begin
 
-        **Additional Tips:**
-        - Use a logic analyzer to verify UART signals.
-        - Consult the FPGA and UART module documentation for specific implementation details.
-        """
-        # Create a new window to display the instructions
-        instruction_window = tk.Toplevel(self.root)
-        instruction_window.title("UART Setup Instructions")
+        if rising_edge(clk_in) then
+            if (reset_plaintext_debounced = '1') then
+                psu_on             <= '0';
+                psu_off            <= '0';
+                psu_inc            <= '0';
+                psu_phase          <= 0;
+                cycle_counter_psu  <= 0;
+                previous_psu_phase <= 0;
+            else
+                if (psu_phase /= previous_psu_phase) then
 
-        # Add a Text widget with a scrollbar
-        text_area = tk.Text(instruction_window,
-                            wrap='word', width=80, height=30)
-        text_area.insert(tk.END, instructions)
-        text_area.config(state='disabled')
-        text_area.pack(side='left', fill='both', expand=True)
+                    case psu_phase is
 
-        scrollbar = ttk.Scrollbar(instruction_window, command=text_area.yview)
-        scrollbar.pack(side='right', fill='y')
-        text_area['yscrollcommand'] = scrollbar.set
+                        when 1 =>
+
+                            psu_inc <= '1';
+
+                        when 2 =>
+
+                            psu_on <= '1';
+
+                        when 3 =>
+
+                            psu_off <= '1';
+
+                        when others =>
+
+                            psu_inc <= '0';
+                            psu_on  <= '0';
+                            psu_off <= '0';
+
+                    end case;
+
+                else
+                    psu_inc <= '0';
+                    psu_on  <= '0';
+                    psu_off <= '0';
+                end if;
+
+                previous_psu_phase <= psu_phase;
+
+                case psu_phase is
+
+                    when 0 =>
+
+                        if (cycle_counter_psu >= reset_duration) then
+                            cycle_counter_psu <= 0;
+                            psu_phase         <= 1;
+                        else
+                            cycle_counter_psu <= cycle_counter_psu + 1;
+                        end if;
+
+                    when 1 =>
+
+                        if (cycle_counter_psu >= (off_duration / 2)) then
+                            cycle_counter_psu <= 0;
+                            psu_phase         <= 2;
+                        else
+                            cycle_counter_psu <= cycle_counter_psu + 1;
+                        end if;
+
+                    when 2 =>
+
+                        if (cycle_counter_psu >= (off_duration / 2)) then
+                            cycle_counter_psu <= 0;
+                            psu_phase         <= 3;
+                        else
+                            cycle_counter_psu <= cycle_counter_psu + 1;
+                        end if;
+
+                    when 3 =>
+
+                        if (cycle_counter_psu >= on_duration) then
+                            cycle_counter_psu <= 0;
+                            psu_phase         <= 1;
+                        else
+                            cycle_counter_psu <= cycle_counter_psu + 1;
+                        end if;
+
+                    when others =>
+
+                        psu_phase <= 0;
+
+                end case;
+
+            end if;
+        end if;
+
+    end process psu_process;
+
+    -- Handles the UART transmission of PSU control signals
+    uart_tx_process : process (clk_in) is
+    begin
+
+        if rising_edge(clk_in) then
+            s_axi_awvalid <= '0';
+            s_axi_wvalid  <= '0';
+            s_axi_bready  <= '0';
+            uart_valid    <= '0';
+
+            case uart_state is
+
+                when state_idle =>
+
+                    if (psu_inc = '1') then
+                        uart_buffer  <= x"49";
+                        s_axi_awaddr <= uart_txfifo_addr;
+                        uart_state   <= state_send;
+                    elsif (psu_off = '1') then
+                        uart_buffer  <= x"30";
+                        s_axi_awaddr <= uart_txfifo_addr;
+                        uart_state   <= state_send;
+                    elsif (psu_on = '1') then
+                        uart_buffer  <= x"31";
+                        s_axi_awaddr <= uart_txfifo_addr;
+                        uart_state   <= state_send;
+                    end if;
+
+                when state_send =>
+
+                    s_axi_wdata(7 downto 0) <= uart_buffer;
+                    s_axi_awvalid           <= '1';
+                    s_axi_wvalid            <= '1';
+                    uart_valid              <= '1';
+                    if (s_axi_awready = '1' and s_axi_wready = '1') then
+                        s_axi_awvalid <= '0';
+                        s_axi_wvalid  <= '0';
+                        uart_state    <= state_wait_bvalid;
+                    end if;
+
+                when state_wait_bvalid =>
+
+                    if (s_axi_bvalid = '1') then
+                        s_axi_bready <= '1';
+                        uart_state   <= state_idle;
+                    end if;
+
+                when others =>
+
+                    uart_state <= state_idle;
+
+            end case;
+
+        end if;
+
+    end process uart_tx_process;
+
+    **If you are not using a synchronous wrapper, you must adjust the VHDL to trigger transmission using other signals.**
+    **If you identify a useful alternative method, please document it so it can be added to these instructions.**
+
+    **Testing with TruSweep:**
+       - Run TruSweep with UART control enabled.
+       - Ensure the UART settings (port and baud rate) match between the AXI UART Lite configuration and the TruSweep configuration.
+    """
+    # Create a new window to display the instructions
+    instruction_window = tk.Toplevel(self.root)
+    instruction_window.title("UART Setup Instructions")
+
+    # Add a Text widget with a scrollbar
+    text_area = tk.Text(instruction_window, wrap='word', width=80, height=30)
+    text_area.insert(tk.END, instructions)
+    text_area.config(state='disabled')
+    text_area.pack(side='left', fill='both', expand=True)
+
+    scrollbar = ttk.Scrollbar(instruction_window, command=text_area.yview)
+    scrollbar.pack(side='right', fill='y')
+    text_area['yscrollcommand'] = scrollbar.set
 
 
 if __name__ == '__main__':
